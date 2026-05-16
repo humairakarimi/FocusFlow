@@ -22,9 +22,12 @@ interface DragState {
   originalDate: string;
   originalStartTime: string;
   durationMins: number;
-  // pointer Y offset from the event's top edge at drag-start
-  pointerOffsetY: number;
-  // current snapped preview
+  /**
+   * How many content-pixels from the event's top the pointer landed.
+   * Computed once at drag-start; held constant so the event doesn't
+   * jump when the pointer moves.
+   */
+  pointerOffsetPx: number;
   previewDate: string;
   previewStartTime: string;
   previewEndTime: string;
@@ -32,16 +35,18 @@ interface DragState {
 }
 
 const HOURS = Array.from({ length: TOTAL_HOURS }, (_, i) => START_HOUR + i);
-const TIME_COL_W = 56; // px — must match the time-label column width
+const TIME_COL_W = 56;     // px — width of the time-label gutter
 const PX_PER_MIN = HOUR_HEIGHT / 60;
 const SNAP_MINS = 15;
-const DRAG_THRESHOLD_PX = 5;
+const DRAG_THRESHOLD_PX = 4;
+const AUTOSCROLL_ZONE = 60; // px from edge before auto-scroll kicks in
+const AUTOSCROLL_MAX = 12;  // px per frame at the very edge
 
-/** Convert a raw Y pixel (from START_HOUR top) to a snapped start/end pair. */
-function snapToGrid(
-  rawPx: number,
-  durationMins: number,
-): { startTime: string; endTime: string } {
+/**
+ * Convert a raw pixel offset (from the start of grid content at START_HOUR)
+ * into a snapped start/end time pair, clamped to the visible range.
+ */
+function snapToGrid(rawPx: number, durationMins: number) {
   const rawMins = rawPx / PX_PER_MIN + START_HOUR * 60;
   const snapped = Math.round(rawMins / SNAP_MINS) * SNAP_MINS;
   const clamped = Math.max(
@@ -60,24 +65,37 @@ export default function CalendarGrid({ onEventClick, onSlotClick, onStartTimer }
 
   const days = viewMode === 'week' ? getWeekDays(currentDate) : [currentDate];
 
-  // Refs so pointer handlers always see latest values without re-subscribing
+  // Refs updated every render so pointer handlers always see the latest values
   const daysRef = useRef(days);
   daysRef.current = days;
   const eventsRef = useRef(events);
   eventsRef.current = events;
 
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const columnsRef = useRef<HTMLDivElement>(null); // wraps day columns, excludes time gutter
+  // DOM refs
+  const scrollRef = useRef<HTMLDivElement>(null);   // the scrollable container
+  const columnsRef = useRef<HTMLDivElement>(null);  // wraps day columns (excludes time gutter)
+
   const [nowTop, setNowTop] = useState<number | null>(null);
 
-  // Drag state — kept in both ref (for handlers) and useState (for rendering)
+  // Drag state — both ref (for pointer handlers) and useState (for render)
   const [drag, setDrag] = useState<DragState | null>(null);
   const dragRef = useRef<DragState | null>(null);
+
+  // Stores the client position where pointerdown fired, for threshold check
   const dragStartClientRef = useRef<{ x: number; y: number } | null>(null);
-  // Prevents a click from opening the edit modal right after a drag ends
+
+  // Latest pointer position — used by auto-scroll RAF to recompute preview
+  const lastClientXRef = useRef(0);
+  const lastClientYRef = useRef(0);
+
+  // RAF handles
+  const moveRafRef = useRef<number | null>(null);
+  const scrollRafRef = useRef<number | null>(null);
+
+  // Suppresses the click-to-open-modal that fires right after a drop
   const justDraggedRef = useRef(false);
 
-  // Auto-scroll to current time on mount / view change
+  // ── now indicator ─────────────────────────────────────────────────────────
   useEffect(() => {
     const now = new Date();
     const mins = now.getHours() * 60 + now.getMinutes() - START_HOUR * 60;
@@ -86,7 +104,6 @@ export default function CalendarGrid({ onEventClick, onSlotClick, onStartTimer }
     if (scrollRef.current) scrollRef.current.scrollTop = Math.max(0, top - 120);
   }, [viewMode, currentDate]);
 
-  // Update the now-indicator every minute
   useEffect(() => {
     const tick = () => {
       const now = new Date();
@@ -97,59 +114,159 @@ export default function CalendarGrid({ onEventClick, onSlotClick, onStartTimer }
     return () => clearInterval(id);
   }, []);
 
-  // Pointer move / up — only active while a drag is in progress
+  // ── drag coordinate computation ───────────────────────────────────────────
+  /**
+   * Core position calculation.
+   *
+   * Coordinate system used (one consistent system throughout):
+   *   "content Y" = pixels from the very top of the scrollable content
+   *                 (= 0 at START_HOUR, grows downward)
+   *
+   * Formula:
+   *   contentY(pointer) = (clientY - scrollContainerRect.top) + scrollTop
+   *
+   *   scrollContainerRect.top is the FIXED viewport position of the scroll box —
+   *   it never changes as the user scrolls.  Adding scrollTop converts the
+   *   viewport-relative pointer position into absolute content coordinates.
+   *
+   *   Subtracting pointerOffsetPx then gives the content Y of the event's
+   *   top edge, not the pointer itself.
+   *
+   * Previous bug: columnsRef.getBoundingClientRect().top was used instead of
+   * scrollContainerRect.top.  Because the columns div is inside the scrollable
+   * container, its viewport top *decreases* as the user scrolls — so
+   * (clientY - colsRect.top) already embeds scrollTop.  Adding scrollTop a
+   * second time caused every hour scrolled to shift the predicted time by one
+   * hour (3 hours scrolled → 3-hour jump).
+   */
+  const computePreview = useCallback((clientX: number, clientY: number) => {
+    const d = dragRef.current;
+    if (!d || !scrollRef.current || !columnsRef.current) return;
+
+    // Fixed viewport rect of the scroll container (never changes with scroll)
+    const scrollRect = scrollRef.current.getBoundingClientRect();
+    const scrollTop = scrollRef.current.scrollTop;
+
+    // Content Y of the event's top edge
+    const contentY = (clientY - scrollRect.top) + scrollTop - d.pointerOffsetPx;
+
+    const { startTime, endTime } = snapToGrid(contentY, d.durationMins);
+
+    // Which day column is the pointer over?
+    const colsRect = columnsRef.current.getBoundingClientRect();
+    const colWidth = colsRect.width / daysRef.current.length;
+    const relX = clientX - colsRect.left;
+    const colIdx = Math.max(0, Math.min(daysRef.current.length - 1, Math.floor(relX / colWidth)));
+    const previewDate = daysRef.current[colIdx];
+
+    const next: DragState = {
+      ...d,
+      previewDate,
+      previewStartTime: startTime,
+      previewEndTime: endTime,
+      hasMoved: true,
+    };
+    dragRef.current = next;
+    setDrag(next);
+  }, []);
+
+  // ── pointer event handlers (active only while dragging) ───────────────────
   const isDragging = !!drag;
   useEffect(() => {
     if (!isDragging) return;
 
+    const stopAutoScroll = () => {
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    };
+
+    const startAutoScroll = (direction: 'up' | 'down', speed: number) => {
+      stopAutoScroll();
+      const scroll = scrollRef.current;
+      if (!scroll) return;
+
+      const tick = () => {
+        if (!scrollRef.current) return;
+        const max = scroll.scrollHeight - scroll.clientHeight;
+        if (direction === 'up') {
+          scroll.scrollTop = Math.max(0, scroll.scrollTop - speed);
+        } else {
+          scroll.scrollTop = Math.min(max, scroll.scrollTop + speed);
+        }
+        // Keep preview in sync as the scroll position changes
+        computePreview(lastClientXRef.current, lastClientYRef.current);
+        scrollRafRef.current = requestAnimationFrame(tick);
+      };
+      scrollRafRef.current = requestAnimationFrame(tick);
+    };
+
     const onMove = (e: PointerEvent) => {
       const d = dragRef.current;
-      if (!d || !columnsRef.current || !scrollRef.current) return;
+      if (!d) return;
 
-      // Ignore until threshold exceeded (avoids triggering drag on accidental tiny movements)
-      const start = dragStartClientRef.current;
-      if (start && !d.hasMoved) {
-        const dist = Math.abs(e.clientX - start.x) + Math.abs(e.clientY - start.y);
-        if (dist < DRAG_THRESHOLD_PX) return;
+      // Threshold — ignore tiny movements so that clicks still work
+      if (!d.hasMoved) {
+        const start = dragStartClientRef.current;
+        if (start) {
+          const dist = Math.hypot(e.clientX - start.x, e.clientY - start.y);
+          if (dist < DRAG_THRESHOLD_PX) return;
+        }
       }
 
-      const colsRect = columnsRef.current.getBoundingClientRect();
-      const scrollTop = scrollRef.current.scrollTop;
+      lastClientXRef.current = e.clientX;
+      lastClientYRef.current = e.clientY;
 
-      // Y of the event's top edge in scroll-content coordinates
-      const rawY = (e.clientY - colsRect.top) + scrollTop - d.pointerOffsetY;
+      // Throttle rendering to one update per animation frame
+      if (moveRafRef.current !== null) cancelAnimationFrame(moveRafRef.current);
+      moveRafRef.current = requestAnimationFrame(() => {
+        moveRafRef.current = null;
+        computePreview(lastClientXRef.current, lastClientYRef.current);
+      });
 
-      const { startTime, endTime } = snapToGrid(rawY, d.durationMins);
+      // Auto-scroll when pointer approaches the top or bottom edge
+      if (!scrollRef.current) return;
+      const scrollRect = scrollRef.current.getBoundingClientRect();
+      const distTop = e.clientY - scrollRect.top;
+      const distBottom = scrollRect.bottom - e.clientY;
 
-      // Determine which day column the pointer is over
-      const colWidth = colsRect.width / daysRef.current.length;
-      const relX = e.clientX - colsRect.left;
-      const colIdx = Math.max(0, Math.min(daysRef.current.length - 1, Math.floor(relX / colWidth)));
-      const previewDate = daysRef.current[colIdx];
-
-      const next: DragState = {
-        ...d,
-        previewDate,
-        previewStartTime: startTime,
-        previewEndTime: endTime,
-        hasMoved: true,
-      };
-      dragRef.current = next;
-      setDrag(next);
+      if (distTop < AUTOSCROLL_ZONE && scrollRef.current.scrollTop > 0) {
+        const speed = AUTOSCROLL_MAX * (1 - distTop / AUTOSCROLL_ZONE);
+        startAutoScroll('up', speed);
+      } else if (distBottom < AUTOSCROLL_ZONE) {
+        const max = scrollRef.current.scrollHeight - scrollRef.current.clientHeight;
+        if (scrollRef.current.scrollTop < max) {
+          const speed = AUTOSCROLL_MAX * (1 - distBottom / AUTOSCROLL_ZONE);
+          startAutoScroll('down', speed);
+        } else {
+          stopAutoScroll();
+        }
+      } else {
+        stopAutoScroll();
+      }
     };
 
     const onUp = () => {
+      stopAutoScroll();
+      if (moveRafRef.current !== null) {
+        cancelAnimationFrame(moveRafRef.current);
+        moveRafRef.current = null;
+      }
+
       const d = dragRef.current;
       dragRef.current = null;
       dragStartClientRef.current = null;
       setDrag(null);
+
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
 
       if (!d?.hasMoved) return;
 
+      // Suppress the click that fires immediately after pointerup
       justDraggedRef.current = true;
-      setTimeout(() => { justDraggedRef.current = false; }, 150);
+      setTimeout(() => { justDraggedRef.current = false; }, 200);
 
       if (
         d.previewDate === d.originalDate &&
@@ -177,32 +294,48 @@ export default function CalendarGrid({ onEventClick, onSlotClick, onStartTimer }
     document.body.style.userSelect = 'none';
 
     return () => {
+      stopAutoScroll();
+      if (moveRafRef.current !== null) cancelAnimationFrame(moveRafRef.current);
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
       document.removeEventListener('pointercancel', onUp);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
-  }, [isDragging, dispatch]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isDragging, dispatch, computePreview]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── drag start ────────────────────────────────────────────────────────────
   const handleEventDragStart = useCallback(
     (e: React.PointerEvent, event: CalendarEvent) => {
-      if (e.button !== 0 && e.pointerType === 'mouse') return;
+      // Mouse: left button only
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
 
+      if (!scrollRef.current) return;
+
+      // Compute the pointer's offset from the event's top edge in CONTENT pixels
+      // so we can subtract it later and keep the event pinned under the cursor.
+      //
+      // event viewport top = scrollContainerRect.top + contentY - scrollTop
+      // pointerOffsetPx    = e.clientY - eventViewportTop
+      //                    = e.clientY - (scrollContainerRect.top + contentY - scrollTop)
+      // Equivalently, just read it directly from the element rect:
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      const pointerOffsetY = Math.max(0, Math.min(e.clientY - rect.top, rect.height - 1));
+      const pointerOffsetPx = Math.max(0, Math.min(e.clientY - rect.top, rect.height - 1));
+
       const durationMins = timeToMinutes(event.endTime) - timeToMinutes(event.startTime);
 
       dragStartClientRef.current = { x: e.clientX, y: e.clientY };
+      lastClientXRef.current = e.clientX;
+      lastClientYRef.current = e.clientY;
 
       const initial: DragState = {
         eventId: event.id,
         originalDate: event.date,
         originalStartTime: event.startTime,
         durationMins,
-        pointerOffsetY,
+        pointerOffsetPx,
         previewDate: event.date,
         previewStartTime: event.startTime,
         previewEndTime: event.endTime,
@@ -214,20 +347,28 @@ export default function CalendarGrid({ onEventClick, onSlotClick, onStartTimer }
     [],
   );
 
-  const handleColumnClick = (e: React.MouseEvent<HTMLDivElement>, date: string) => {
-    if ((e.target as HTMLElement).closest('[data-event]')) return;
-    if (justDraggedRef.current) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const clickMins = ((e.clientY - rect.top) / HOUR_HEIGHT) * 60;
-    const totalMins = START_HOUR * 60 + clickMins;
-    const snapped = Math.round(totalMins / 15) * 15;
-    const clamped = Math.max(START_HOUR * 60, Math.min((END_HOUR - 1) * 60, snapped));
-    onSlotClick(date, minutesToTime(clamped), minutesToTime(Math.min(clamped + 60, END_HOUR * 60)));
-  };
+  // ── column click (create event) ───────────────────────────────────────────
+  const handleColumnClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>, date: string) => {
+      if ((e.target as HTMLElement).closest('[data-event]')) return;
+      if (justDraggedRef.current) return;
 
+      if (!scrollRef.current) return;
+
+      // Same coordinate system as drag:
+      // contentY = (clientY - scrollContainerRect.top) + scrollTop
+      const scrollRect = scrollRef.current.getBoundingClientRect();
+      const contentY = (e.clientY - scrollRect.top) + scrollRef.current.scrollTop;
+      const rawMins = contentY / PX_PER_MIN + START_HOUR * 60;
+      const snapped = Math.round(rawMins / SNAP_MINS) * SNAP_MINS;
+      const clamped = Math.max(START_HOUR * 60, Math.min((END_HOUR - 1) * 60, snapped));
+      onSlotClick(date, minutesToTime(clamped), minutesToTime(Math.min(clamped + 60, END_HOUR * 60)));
+    },
+    [onSlotClick],
+  );
+
+  // ── render ────────────────────────────────────────────────────────────────
   const showNow = nowTop !== null && nowTop >= 0 && nowTop <= TOTAL_HOURS * HOUR_HEIGHT;
-
-  // Data for the ghost (preview) element shown during drag
   const draggingEvent = drag ? events.find(ev => ev.id === drag.eventId) : null;
   const ghostColors = draggingEvent ? categoryColors[draggingEvent.category] : null;
 
@@ -259,7 +400,7 @@ export default function CalendarGrid({ onEventClick, onSlotClick, onStartTimer }
         })}
       </div>
 
-      {/* Scrollable body */}
+      {/* Scrollable body — scrollRef is the scroll CONTAINER (its viewport rect is fixed) */}
       <div
         ref={scrollRef}
         className={`flex-1 overflow-y-auto overflow-x-hidden ${activeTimer ? 'pb-32' : ''}`}
@@ -278,13 +419,12 @@ export default function CalendarGrid({ onEventClick, onSlotClick, onStartTimer }
             ))}
           </div>
 
-          {/* Day columns — columnsRef wraps this so we can measure column widths */}
+          {/* Day columns */}
           <div ref={columnsRef} className="flex flex-1 min-w-0">
             {days.map(day => {
               const dayEvents = events.filter(e => e.date === day);
               const layouts = layoutDayEvents(dayEvents);
 
-              // Ghost position for this column (only when dragging to this day)
               const showGhost = drag?.hasMoved && drag.previewDate === day;
               const ghostPos = showGhost && drag
                 ? getEventPosition(drag.previewStartTime, drag.previewEndTime)
@@ -293,8 +433,11 @@ export default function CalendarGrid({ onEventClick, onSlotClick, onStartTimer }
               return (
                 <div
                   key={day}
-                  className="flex-1 relative border-l border-gray-200 dark:border-gray-700 cursor-cell min-w-0"
-                  style={{ minHeight: TOTAL_HOURS * HOUR_HEIGHT }}
+                  className="flex-1 relative border-l border-gray-200 dark:border-gray-700 min-w-0"
+                  style={{
+                    minHeight: TOTAL_HOURS * HOUR_HEIGHT,
+                    cursor: isDragging ? 'grabbing' : 'cell',
+                  }}
                   onClick={e => handleColumnClick(e, day)}
                 >
                   {/* Hour / half-hour grid lines */}
@@ -319,7 +462,7 @@ export default function CalendarGrid({ onEventClick, onSlotClick, onStartTimer }
                       key={layout.event.id}
                       data-event="true"
                       style={{
-                        opacity: drag?.eventId === layout.event.id ? 0.3 : 1,
+                        opacity: drag?.eventId === layout.event.id ? 0.25 : 1,
                         transition: isDragging ? 'none' : 'opacity 150ms',
                       }}
                     >
@@ -334,13 +477,13 @@ export default function CalendarGrid({ onEventClick, onSlotClick, onStartTimer }
                     </div>
                   ))}
 
-                  {/* Drag ghost — snapped preview of where the event will land */}
+                  {/* Ghost preview — shows where the event will land */}
                   {showGhost && ghostPos && ghostColors && drag && (
                     <div
                       className="absolute pointer-events-none z-20 rounded-md border-2 border-dashed"
                       style={{
                         top: ghostPos.top + 1,
-                        height: ghostPos.height - 2,
+                        height: Math.max(ghostPos.height - 2, 20),
                         left: 3,
                         right: 3,
                         backgroundColor: ghostColors.light,
@@ -348,10 +491,16 @@ export default function CalendarGrid({ onEventClick, onSlotClick, onStartTimer }
                       }}
                     >
                       <div className="px-2 pt-1 overflow-hidden">
-                        <p className="text-xs font-semibold leading-tight truncate" style={{ color: ghostColors.text }}>
+                        <p
+                          className="text-[11px] font-semibold leading-tight truncate"
+                          style={{ color: ghostColors.text }}
+                        >
                           {draggingEvent?.title}
                         </p>
-                        <p className="text-[10px] leading-tight mt-0.5" style={{ color: ghostColors.text + 'bb' }}>
+                        <p
+                          className="text-[10px] leading-tight mt-0.5"
+                          style={{ color: ghostColors.text + 'bb' }}
+                        >
                           {formatTime(drag.previewStartTime)} – {formatTime(drag.previewEndTime)}
                         </p>
                       </div>
