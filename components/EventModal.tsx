@@ -34,6 +34,8 @@ export default function EventModal({
   const [category, setCategory] = useState<Category>(event?.category ?? 'work');
   const [description, setDescription] = useState(event?.description ?? '');
 
+  const timeError = endTime <= startTime;
+
   // Auto-adjust end time when start changes
   const handleStartChange = (val: string) => {
     setStartTime(val);
@@ -45,7 +47,7 @@ export default function EventModal({
   };
 
   const handleSave = () => {
-    if (!title.trim()) return;
+    if (!title.trim() || timeError) return;
     if (isEdit && event) {
       dispatch({
         type: 'UPDATE_EVENT',
@@ -161,9 +163,16 @@ export default function EventModal({
                   value={endTime}
                   min={startTime}
                   onChange={e => setEndTime(e.target.value)}
-                  className="flex-1 text-sm px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
+                  className={`flex-1 text-sm px-3 py-2 rounded-xl border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 transition-colors ${
+                    timeError
+                      ? 'border-red-400 focus:ring-red-400'
+                      : 'border-gray-200 dark:border-gray-700 focus:ring-indigo-500'
+                  }`}
                 />
               </div>
+              {timeError && (
+                <p className="text-xs text-red-500 mt-1">End time must be after start time.</p>
+              )}
             </div>
 
             {/* Category */}
@@ -240,7 +249,7 @@ export default function EventModal({
               </button>
               <button
                 onClick={handleSave}
-                disabled={!title.trim()}
+                disabled={!title.trim() || timeError}
                 className="px-5 py-2 rounded-xl text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors shadow-sm"
               >
                 {isEdit ? 'Save' : 'Create'}

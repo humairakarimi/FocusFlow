@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import {
   formatDate, addDays, getWeekDays, getWeekRange, formatDisplayDate,
@@ -9,6 +10,14 @@ import {
 export default function TopNav({ onMenuToggle }: { onMenuToggle: () => void }) {
   const { state, dispatch } = useApp();
   const { viewMode, currentDate, darkMode } = state;
+
+  // Re-render every second while the timer is running so the focused-today counter stays live.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!state.activeTimer?.isRunning) return;
+    const id = setInterval(() => setTick(n => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [state.activeTimer?.isRunning]);
 
   const weekDays = getWeekDays(currentDate);
   const todayFocused = getTodayFocusedSeconds(state);

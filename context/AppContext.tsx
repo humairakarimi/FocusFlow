@@ -46,7 +46,7 @@ function reducer(state: AppState, action: AppAction): AppState {
         activeTimer: {
           eventId: action.eventId,
           startedAt: Date.now(),
-          baseElapsed: 0,
+          baseElapsed: action.baseElapsed ?? 0,
           isRunning: true,
           mode: action.mode,
         },

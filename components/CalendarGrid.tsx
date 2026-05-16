@@ -21,26 +21,23 @@ const TIME_COL_W = 56; // px
 
 export default function CalendarGrid({ onEventClick, onSlotClick, onStartTimer }: Props) {
   const { state } = useApp();
-  const { viewMode, currentDate, events } = state;
+  const { viewMode, currentDate, events, activeTimer } = state;
 
   const days = viewMode === 'week' ? getWeekDays(currentDate) : [currentDate];
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [nowTop, setNowTop] = useState<number | null>(null);
 
-  // Auto-scroll to current time on mount
+  // Auto-scroll to current time on mount and when view changes
   useEffect(() => {
-    const getTop = () => {
-      const now = new Date();
-      const mins = now.getHours() * 60 + now.getMinutes() - START_HOUR * 60;
-      return (mins / 60) * HOUR_HEIGHT;
-    };
-    const top = getTop();
+    const now = new Date();
+    const mins = now.getHours() * 60 + now.getMinutes() - START_HOUR * 60;
+    const top = (mins / 60) * HOUR_HEIGHT;
     setNowTop(top);
     if (scrollRef.current) {
       scrollRef.current.scrollTop = Math.max(0, top - 120);
     }
-  }, []);
+  }, [viewMode, currentDate]);
 
   // Update now-indicator every minute
   useEffect(() => {
@@ -57,8 +54,9 @@ export default function CalendarGrid({ onEventClick, onSlotClick, onStartTimer }
     // Ignore clicks on event blocks
     if ((e.target as HTMLElement).closest('[data-event]')) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const scrollTop = scrollRef.current?.scrollTop ?? 0;
-    const clickY = e.clientY - rect.top + scrollTop;
+    // getBoundingClientRect() is viewport-relative and already accounts for scroll,
+    // so e.clientY - rect.top gives the correct Y within the full column height.
+    const clickY = e.clientY - rect.top;
     const clickMins = (clickY / HOUR_HEIGHT) * 60;
     const totalMins = START_HOUR * 60 + clickMins;
     const snapped = Math.round(totalMins / 15) * 15;
@@ -100,8 +98,8 @@ export default function CalendarGrid({ onEventClick, onSlotClick, onStartTimer }
         })}
       </div>
 
-      {/* Scrollable body */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden">
+      {/* Scrollable body — extra bottom padding when timer panel is visible so it doesn't obscure events */}
+      <div ref={scrollRef} className={`flex-1 overflow-y-auto overflow-x-hidden ${activeTimer ? 'pb-32' : ''}`}>
         <div className="flex" style={{ minHeight: TOTAL_HOURS * HOUR_HEIGHT }}>
           {/* Time labels column */}
           <div className="relative shrink-0" style={{ width: TIME_COL_W }}>
@@ -133,7 +131,7 @@ export default function CalendarGrid({ onEventClick, onSlotClick, onStartTimer }
                     <div className="border-t border-gray-100 dark:border-gray-800 w-full" />
                     {/* Half-hour line */}
                     <div
-                      className="border-t border-dashed border-gray-50 dark:border-gray-800/50 w-full absolute"
+                      className="border-t border-dashed border-gray-100 dark:border-gray-800 w-full absolute"
                       style={{ top: HOUR_HEIGHT / 2 }}
                     />
                   </div>

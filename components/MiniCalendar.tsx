@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import { formatDate, parseDate, getMonthCalendar, isToday, getWeekDays } from '@/lib/utils';
 
@@ -12,6 +12,12 @@ export default function MiniCalendar() {
     const d = parseDate(state.currentDate);
     return { year: d.getFullYear(), month: d.getMonth() };
   });
+
+  // Sync mini calendar month when the main calendar navigates to a different month.
+  useEffect(() => {
+    const d = parseDate(state.currentDate);
+    setViewDate({ year: d.getFullYear(), month: d.getMonth() });
+  }, [state.currentDate]);
 
   const weeks = getMonthCalendar(viewDate.year, viewDate.month);
   const monthLabel = new Date(viewDate.year, viewDate.month, 1)

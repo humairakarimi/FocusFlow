@@ -219,8 +219,5 @@ export function getTodayFocusedSeconds(state: AppState): number {
 
 export function getCompletedTodayCount(state: AppState): number {
   const today = formatDate(new Date());
-  return (
-    state.events.filter(e => e.date === today && e.completed).length +
-    state.todos.filter(t => t.completed).length
-  );
+  return state.events.filter(e => e.date === today && e.completed).length;
 }

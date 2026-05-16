@@ -6,7 +6,6 @@ import {
   getTimerElapsed, getPomodoroInfo, getFocusedSecondsFromElapsed,
   formatTimerDisplay, formatDuration, categoryColors,
 } from '@/lib/utils';
-import type { ActiveTimer } from '@/types';
 
 export default function FocusTimer() {
   const { state, dispatch } = useApp();
@@ -46,10 +45,12 @@ export default function FocusTimer() {
 
   const switchMode = (mode: 'normal' | 'pomodoro') => {
     if (activeTimer.mode === mode) return;
+    // Pass current elapsed so accumulated focus time is not lost on mode switch.
     dispatch({
       type: 'START_TIMER',
       eventId: activeTimer.eventId,
       mode,
+      baseElapsed: elapsed,
     });
   };
 

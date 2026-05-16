@@ -48,7 +48,7 @@ export type AppAction =
   | { type: 'ADD_TODO'; todo: Todo }
   | { type: 'UPDATE_TODO'; todo: Todo }
   | { type: 'DELETE_TODO'; id: string }
-  | { type: 'START_TIMER'; eventId: string; mode: 'normal' | 'pomodoro' }
+  | { type: 'START_TIMER'; eventId: string; mode: 'normal' | 'pomodoro'; baseElapsed?: number }
   | { type: 'PAUSE_TIMER' }
   | { type: 'RESUME_TIMER' }
   | { type: 'STOP_TIMER'; focusedSeconds: number }
