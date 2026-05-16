@@ -480,14 +480,16 @@ export default function CalendarGrid({ onEventClick, onSlotClick, onStartTimer }
                   {/* Ghost preview — shows where the event will land */}
                   {showGhost && ghostPos && ghostColors && drag && (
                     <div
-                      className="absolute pointer-events-none z-20 rounded-md border-2 border-dashed"
+                      className="absolute pointer-events-none z-20 rounded-md"
                       style={{
                         top: ghostPos.top + 1,
                         height: Math.max(ghostPos.height - 2, 20),
                         left: 3,
                         right: 3,
                         backgroundColor: ghostColors.light,
-                        borderColor: ghostColors.bg,
+                        borderLeft: `3px solid ${ghostColors.bg}`,
+                        boxShadow: `0 2px 8px ${ghostColors.bg}40`,
+                        opacity: 0.92,
                       }}
                     >
                       <div className="px-2 pt-1 overflow-hidden">
