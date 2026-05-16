@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
 import {
   formatDate, addDays, getWeekDays, getWeekRange, formatDisplayDate,
@@ -18,6 +18,17 @@ export default function TopNav({ onMenuToggle }: { onMenuToggle: () => void }) {
     const id = setInterval(() => setTick(n => n + 1), 1000);
     return () => clearInterval(id);
   }, [state.activeTimer?.isRunning]);
+
+  // Keyboard shortcuts popover
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const shortcutsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (shortcutsRef.current && !shortcutsRef.current.contains(e.target as Node)) setShowShortcuts(false);
+    };
+    if (showShortcuts) document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showShortcuts]);
 
   const weekDays = getWeekDays(currentDate);
   const todayFocused = getTodayFocusedSeconds(state);
@@ -52,7 +63,7 @@ export default function TopNav({ onMenuToggle }: { onMenuToggle: () => void }) {
       <div className="flex items-center gap-2 mr-2">
         <button
           onClick={onMenuToggle}
-          className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors md:hidden"
+          className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
         >
           <svg className="w-5 h-5 text-gray-600 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
@@ -147,6 +158,33 @@ export default function TopNav({ onMenuToggle }: { onMenuToggle: () => void }) {
           </span>
           <span className="text-xs text-emerald-600 dark:text-emerald-400 hidden lg:block">focused</span>
         </div>
+      </div>
+
+      {/* Keyboard shortcuts */}
+      <div ref={shortcutsRef} className="relative">
+        <button
+          onClick={() => setShowShortcuts(v => !v)}
+          className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-400 transition-colors text-sm font-bold"
+          title="Keyboard shortcuts"
+        >
+          ?
+        </button>
+        {showShortcuts && (
+          <div className="absolute right-0 top-full mt-2 w-56 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg z-50 p-3">
+            <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-2">Shortcuts</p>
+            {[
+              ['N', 'New event'],
+              ['T', 'Go to today'],
+              ['D', 'Day view'],
+              ['W', 'Week view'],
+            ].map(([key, label]) => (
+              <div key={key} className="flex items-center justify-between py-1">
+                <span className="text-xs text-gray-600 dark:text-gray-300">{label}</span>
+                <kbd className="text-[10px] font-mono bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 px-1.5 py-0.5 rounded">{key}</kbd>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Dark mode toggle */}

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import { generateId, categoryColors, formatDate, timeToMinutes, minutesToTime } from '@/lib/utils';
+import ConfirmModal from './ConfirmModal';
 import type { CalendarEvent, Category } from '@/types';
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
   defaultEndTime?: string;
   defaultTitle?: string;
   onClose: () => void;
+  onSaved?: (event: CalendarEvent) => void;
 }
 
 const CATEGORIES: Category[] = ['work', 'personal', 'health', 'learning', 'other'];
@@ -23,9 +25,11 @@ export default function EventModal({
   defaultEndTime,
   defaultTitle,
   onClose,
+  onSaved,
 }: Props) {
   const { dispatch } = useApp();
   const isEdit = !!event;
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const [title, setTitle] = useState(event?.title ?? defaultTitle ?? '');
   const [date, setDate] = useState(event?.date ?? defaultDate ?? formatDate(new Date()));
@@ -48,35 +52,18 @@ export default function EventModal({
 
   const handleSave = () => {
     if (!title.trim() || timeError) return;
-    if (isEdit && event) {
-      dispatch({
-        type: 'UPDATE_EVENT',
-        event: { ...event, title: title.trim(), date, startTime, endTime, category, description },
-      });
-    } else {
-      dispatch({
-        type: 'ADD_EVENT',
-        event: {
-          id: generateId(),
-          title: title.trim(),
-          date,
-          startTime,
-          endTime,
-          category,
-          description,
-          focusedSeconds: 0,
-          completed: false,
-        },
-      });
-    }
+    const saved: CalendarEvent = isEdit && event
+      ? { ...event, title: title.trim(), date, startTime, endTime, category, description }
+      : { id: generateId(), title: title.trim(), date, startTime, endTime, category, description, focusedSeconds: 0, completed: false };
+    dispatch({ type: isEdit ? 'UPDATE_EVENT' : 'ADD_EVENT', event: saved });
+    onSaved?.(saved);
     onClose();
   };
 
-  const handleDelete = () => {
-    if (event) {
-      dispatch({ type: 'DELETE_EVENT', id: event.id });
-      onClose();
-    }
+  const handleDelete = () => setShowDeleteConfirm(true);
+  const handleConfirmDelete = () => {
+    if (event) dispatch({ type: 'DELETE_EVENT', id: event.id });
+    onClose();
   };
 
   const handleToggleComplete = () => {
@@ -95,6 +82,16 @@ export default function EventModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {showDeleteConfirm && (
+        <ConfirmModal
+          title="Delete this event?"
+          message={`"${event?.title}" will be permanently removed from your calendar.`}
+          confirmLabel="Delete event"
+          onConfirm={handleConfirmDelete}
+          onCancel={() => setShowDeleteConfirm(false)}
+        />
+      )}
+
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/40 backdrop-blur-sm"

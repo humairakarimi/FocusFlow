@@ -25,11 +25,12 @@ export default function EventBlock({ layout, onClick, onStartTimer }: Props) {
     left: `calc(${left * 100}% + ${GAP}px)`,
     width: `calc(${width * 100}% - ${GAP * 2}px)`,
     backgroundColor: colors.light,
-    borderLeft: `3px solid ${colors.bg}`,
+    borderLeft: `3px solid ${event.completed ? colors.bg + '80' : colors.bg}`,
     borderRadius: 6,
     overflow: 'hidden',
     cursor: 'pointer',
     zIndex: 1,
+    opacity: event.completed ? 0.6 : 1,
   };
 
   return (
