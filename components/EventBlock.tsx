@@ -8,9 +8,10 @@ interface Props {
   layout: EventLayout;
   onClick: () => void;
   onStartTimer: () => void;
+  onDragStart: (e: React.PointerEvent) => void;
 }
 
-export default function EventBlock({ layout, onClick, onStartTimer }: Props) {
+export default function EventBlock({ layout, onClick, onStartTimer, onDragStart }: Props) {
   const { event, left, width } = layout;
   const colors = categoryColors[event.category];
   const { top, height } = getEventPosition(event.startTime, event.endTime);
@@ -28,16 +29,19 @@ export default function EventBlock({ layout, onClick, onStartTimer }: Props) {
     borderLeft: `3px solid ${event.completed ? colors.bg + '80' : colors.bg}`,
     borderRadius: 6,
     overflow: 'hidden',
-    cursor: 'pointer',
+    cursor: 'grab',
     zIndex: 1,
     opacity: event.completed ? 0.6 : 1,
+    // Prevents the browser from hijacking touch events for scroll when dragging
+    touchAction: 'none',
   };
 
   return (
     <div
       style={style}
       onClick={onClick}
-      className="group p-1.5 hover:shadow-md transition-all hover:z-10 hover:brightness-95"
+      onPointerDown={onDragStart}
+      className="group p-1.5 hover:shadow-md transition-shadow hover:z-10 hover:brightness-95 active:cursor-grabbing"
     >
       {isTiny ? (
         <p className="text-[10px] font-semibold leading-none truncate" style={{ color: colors.text }}>
@@ -71,6 +75,7 @@ export default function EventBlock({ layout, onClick, onStartTimer }: Props) {
           {!event.completed && height >= HOUR_HEIGHT && (
             <button
               onClick={e => { e.stopPropagation(); onStartTimer(); }}
+              onPointerDown={e => e.stopPropagation()} // don't start drag from Focus button
               className="mt-1.5 opacity-0 group-hover:opacity-100 transition-all flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-white/70 hover:bg-white shadow-sm"
               style={{ color: colors.text }}
             >
